@@ -24,6 +24,9 @@ Both modes share the same supervision core so behavior is consistent:
   - Detects sleep/wake and network change events.
   - On macOS with cgo enabled it uses native frameworks.
   - When cgo is disabled or on non-darwin, it falls back to polling.
+- Sleep prevention (optional):
+  - `agent.prevent_sleep` / `client.prevent_sleep` wraps the runtime with
+    `caffeinate` to keep the system awake while tunnels are running.
 - `pkg/restart`
   - Backoff policy with exponential delay, jitter, and debounce window.
 - `pkg/sshutil`

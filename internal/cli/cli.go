@@ -156,6 +156,8 @@ func runInit(args []string) int {
 	periodicRestartSec := fs.Int("periodic-restart-sec", 3600, "periodic restart interval seconds (0 disables)")
 	logLevel := fs.String("log-level", "info", "log level")
 	logPath := fs.String("log-path", "~/.rpa/logs/agent.log", "log path")
+	agentPreventSleep := fs.Bool("agent-prevent-sleep", false, "prevent system sleep while agent is running")
+	clientPreventSleep := fs.Bool("client-prevent-sleep", false, "prevent system sleep while client is running")
 	force := fs.Bool("force", false, "overwrite config if it exists")
 	var sshOptions []string
 	fs.Func("ssh-option", "additional ssh option (repeatable)", func(value string) error {
@@ -226,6 +228,7 @@ func runInit(args []string) int {
 			LaunchdLabel:       *launchdLabel,
 			RestartPolicy:      *restartPolicy,
 			PeriodicRestartSec: *periodicRestartSec,
+			PreventSleep:       *agentPreventSleep,
 		},
 		SSH: config.SSHConfig{
 			User:         *sshUser,
@@ -239,6 +242,7 @@ func runInit(args []string) int {
 			Path:  *logPath,
 		},
 	}
+	cfg.Client.PreventSleep = *clientPreventSleep
 	if len(remoteForwards) > 0 {
 		cfg.SSH.RemoteForwards = append([]string(nil), remoteForwards...)
 	}
@@ -307,6 +311,14 @@ func runAgentUp(args []string) int {
 		KeepAlive:   true,
 		StdoutPath:  "",
 		StderrPath:  "",
+	}
+	if cfg.Agent.PreventSleep {
+		argv, err := wrapWithCaffeinate(spec.ProgramArgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "caffeinate not available: %v\n", err)
+			return exitError
+		}
+		spec.ProgramArgs = argv
 	}
 	plistPath, err := launchd.Install(spec)
 	if err != nil {
@@ -511,6 +523,14 @@ func runClientUp(args []string) int {
 		KeepAlive:   true,
 		StdoutPath:  "",
 		StderrPath:  "",
+	}
+	if cfg.Client.PreventSleep {
+		argv, err := wrapWithCaffeinate(spec.ProgramArgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "caffeinate not available: %v\n", err)
+			return exitError
+		}
+		spec.ProgramArgs = argv
 	}
 	plistPath, err := launchd.Install(spec)
 	if err != nil {
@@ -975,6 +995,7 @@ func runForegroundAgent(cfg *config.Config, label string) int {
 		fmt.Fprintf(os.Stderr, "logger init failed: %v\n", err)
 		return exitError
 	}
+	startCaffeinate(logger, cfg.Agent.PreventSleep)
 
 	server, err := ipcserver.NewServer(cfg, agt, logs)
 	if err != nil {
@@ -1024,6 +1045,7 @@ func runForegroundClient(cfg *config.Config, label string) int {
 		return exitError
 	}
 	logger.SetLevel(cfg.ClientLogging.Level)
+	startCaffeinate(logger, cfg.Client.PreventSleep)
 
 	server, err := clientipcserver.NewServer(cfg, cli, logs)
 	if err != nil {
@@ -1283,6 +1305,32 @@ func defaultConfigPath() string {
 	return filepath.Join(home, ".rpa", "rpa.yaml")
 }
 
+func wrapWithCaffeinate(args []string) ([]string, error) {
+	path, err := exec.LookPath("caffeinate")
+	if err != nil {
+		return nil, err
+	}
+	out := []string{path, "-dimsu"}
+	out = append(out, args...)
+	return out, nil
+}
+
+func startCaffeinate(logger *logging.Logger, enabled bool) {
+	if !enabled {
+		return
+	}
+	cmd := exec.Command("caffeinate", "-dimsu", "-w", fmt.Sprintf("%d", os.Getpid()))
+	if err := cmd.Start(); err != nil {
+		logger.Event("ERROR", "caffeinate_failed", map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+	logger.Event("INFO", "caffeinate_started", map[string]any{
+		"pid": fmt.Sprintf("%d", cmd.Process.Pid),
+	})
+}
+
 func printUsage() {
 	fmt.Println("rpa")
 	fmt.Println("")
@@ -1322,6 +1370,7 @@ func printAgentUsage() {
 	fmt.Println("  run: run in foreground for debugging (non-persistent)")
 	fmt.Println("  add/remove: updates config and restarts running agent if active")
 	fmt.Println("  clear: removes all forwards and stops the service")
+	fmt.Println("  prevent_sleep: set agent.prevent_sleep=true to keep the system awake")
 	fmt.Println("")
 	fmt.Println("Remote forward spec example:")
 	fmt.Println("  \"0.0.0.0:2222:localhost:22\"  (bind:remotePort:localHost:localPort)")
@@ -1349,6 +1398,7 @@ func printClientUsage() {
 	fmt.Println("  run: run in foreground for debugging (non-persistent)")
 	fmt.Println("  add/remove: updates config and restarts running client if active")
 	fmt.Println("  clear: removes all forwards and stops the service")
+	fmt.Println("  prevent_sleep: set client.prevent_sleep=true to keep the system awake")
 	fmt.Println("")
 	fmt.Println("Local forward spec example:")
 	fmt.Println("  \"127.0.0.1:15432:127.0.0.1:5432\" (bind:localPort:remoteHost:remotePort)")

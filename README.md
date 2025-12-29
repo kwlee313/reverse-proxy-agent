@@ -148,6 +148,7 @@ agent:
   name: "rpa-agent"
   launchd_label: "com.rpa.agent"
   restart_policy: "always"
+  prevent_sleep: false
   restart:
     min_delay_ms: 2000
     max_delay_ms: 30000
@@ -163,6 +164,7 @@ client:
   name: "rpa-client"
   launchd_label: "com.rpa.client"
   restart_policy: "always"
+  prevent_sleep: false
   restart:
     min_delay_ms: 2000
     max_delay_ms: 30000

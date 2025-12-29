@@ -30,6 +30,7 @@ type AgentConfig struct {
 	SleepCheckSec      int           `yaml:"sleep_check_sec"`
 	SleepGapSec        int           `yaml:"sleep_gap_sec"`
 	NetworkPollSec     int           `yaml:"network_poll_sec"`
+	PreventSleep       bool          `yaml:"prevent_sleep"`
 }
 
 type ClientConfig struct {
@@ -43,6 +44,7 @@ type ClientConfig struct {
 	NetworkPollSec     int           `yaml:"network_poll_sec"`
 	LocalForward       string        `yaml:"local_forward"`
 	LocalForwards      []string      `yaml:"local_forwards"`
+	PreventSleep       bool          `yaml:"prevent_sleep"`
 }
 
 type SSHConfig struct {
