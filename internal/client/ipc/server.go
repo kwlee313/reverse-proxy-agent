@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,8 @@ type Server struct {
 }
 
 type request struct {
-	Command string `json:"command"`
+	Command string            `json:"command"`
+	Args    map[string]string `json:"args,omitempty"`
 }
 
 type response struct {
@@ -123,6 +125,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleLogs(conn)
 	case "stop":
 		s.handleStop(conn)
+	case "add_local_forward":
+		s.handleAddLocalForward(conn, req.Args)
+	case "remove_local_forward":
+		s.handleRemoveLocalForward(conn, req.Args)
+	case "clear_local_forwards":
+		s.handleClearLocalForwards(conn)
 	default:
 		writeResponse(conn, response{OK: false, Message: "unknown command"})
 	}
@@ -176,6 +184,63 @@ func (s *Server) handleLogs(conn net.Conn) {
 func (s *Server) handleStop(conn net.Conn) {
 	writeResponse(conn, response{OK: true, Message: "stopping"})
 	go s.client.RequestStop()
+}
+
+func (s *Server) handleAddLocalForward(conn net.Conn, args map[string]string) {
+	forward := ""
+	if args != nil {
+		forward = args["local_forward"]
+	}
+	forward = strings.TrimSpace(forward)
+	if forward == "" {
+		writeResponse(conn, response{OK: false, Message: "local_forward is required"})
+		return
+	}
+	added := s.client.EnsureLocalForward(forward)
+	msg := "local forward already present"
+	if added {
+		msg = "local forward added"
+		s.client.RequestRestart("client_add")
+	}
+	writeResponse(conn, response{
+		OK:      true,
+		Message: msg,
+		Data:    map[string]string{"added": fmt.Sprintf("%t", added)},
+	})
+}
+
+func (s *Server) handleRemoveLocalForward(conn net.Conn, args map[string]string) {
+	forward := ""
+	if args != nil {
+		forward = args["local_forward"]
+	}
+	removed, err := s.client.RemoveLocalForward(forward)
+	if err != nil {
+		writeResponse(conn, response{OK: false, Message: err.Error()})
+		return
+	}
+	msg := "local forward not found"
+	if removed {
+		msg = "local forward removed"
+	}
+	writeResponse(conn, response{
+		OK:      true,
+		Message: msg,
+		Data:    map[string]string{"removed": fmt.Sprintf("%t", removed)},
+	})
+}
+
+func (s *Server) handleClearLocalForwards(conn net.Conn) {
+	cleared := s.client.ClearLocalForwards()
+	msg := "no local forwards to clear"
+	if cleared {
+		msg = "local forwards cleared; stopping client"
+	}
+	writeResponse(conn, response{
+		OK:      true,
+		Message: msg,
+		Data:    map[string]string{"cleared": fmt.Sprintf("%t", cleared)},
+	})
 }
 
 func writeResponse(conn net.Conn, resp response) {

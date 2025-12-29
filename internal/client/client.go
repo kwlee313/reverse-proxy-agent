@@ -156,3 +156,43 @@ func (c *Client) EnsureLocalForward(forward string) bool {
 	config.SetLocalForwards(c.cfg, current)
 	return true
 }
+
+func (c *Client) RemoveLocalForward(forward string) (bool, error) {
+	trimmed := strings.TrimSpace(forward)
+	if trimmed == "" {
+		return false, fmt.Errorf("local forward is required")
+	}
+	c.localMu.Lock()
+	defer c.localMu.Unlock()
+	current := config.NormalizeLocalForwards(c.cfg)
+	next := make([]string, 0, len(current))
+	removed := false
+	for _, existing := range current {
+		if existing == trimmed {
+			removed = true
+			continue
+		}
+		next = append(next, existing)
+	}
+	if !removed {
+		return false, nil
+	}
+	if len(next) == 0 {
+		return false, fmt.Errorf("at least one local forward is required")
+	}
+	config.SetLocalForwards(c.cfg, next)
+	c.RequestRestart("local forward removed")
+	return true, nil
+}
+
+func (c *Client) ClearLocalForwards() bool {
+	c.localMu.Lock()
+	defer c.localMu.Unlock()
+	current := config.NormalizeLocalForwards(c.cfg)
+	if len(current) == 0 {
+		return false
+	}
+	config.SetLocalForwards(c.cfg, nil)
+	c.RequestStop()
+	return true
+}

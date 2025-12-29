@@ -92,7 +92,7 @@ func runAgent(args []string) int {
 
 func runClient(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "missing client subcommand (up|down|run|status|logs|metrics|doctor)")
+		fmt.Fprintln(os.Stderr, "missing client subcommand (up|down|run|add|remove|clear|status|logs|metrics|doctor)")
 		return exitUsage
 	}
 	switch args[0] {
@@ -102,6 +102,12 @@ func runClient(args []string) int {
 		return runClientDown(args[1:])
 	case "run":
 		return runClientRun(args[1:])
+	case "add":
+		return runClientAdd(args[1:])
+	case "remove":
+		return runClientRemove(args[1:])
+	case "clear":
+		return runClientClear(args[1:])
 	case "status":
 		return runClientStatus(args[1:])
 	case "logs":
@@ -543,6 +549,124 @@ func runClientRun(args []string) int {
 	return runForegroundClient(cfg, "client run")
 }
 
+func runClientAdd(args []string) int {
+	fs := flag.NewFlagSet("client add", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	localForward := fs.String("local-forward", "", "ssh local forward spec (required)")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if strings.TrimSpace(*localForward) == "" {
+		fmt.Fprintln(os.Stderr, "local-forward is required")
+		return exitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+
+	forwards := config.NormalizeLocalForwards(cfg)
+	forwards = append(forwards, *localForward)
+	config.SetLocalForwards(cfg, forwards)
+	if err := config.Save(*configPath, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config save failed: %v\n", err)
+		return exitError
+	}
+
+	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+		return ipcclientlocal.AddLocalForward(cfg, *localForward)
+	}); ok {
+		if resp.Message != "" {
+			fmt.Println(resp.Message)
+		}
+	}
+	return exitOK
+}
+
+func runClientRemove(args []string) int {
+	fs := flag.NewFlagSet("client remove", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	localForward := fs.String("local-forward", "", "ssh local forward spec (required)")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if strings.TrimSpace(*localForward) == "" {
+		fmt.Fprintln(os.Stderr, "local-forward is required")
+		return exitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+
+	forwards := config.NormalizeLocalForwards(cfg)
+	next := make([]string, 0, len(forwards))
+	for _, value := range forwards {
+		if strings.TrimSpace(value) == strings.TrimSpace(*localForward) {
+			continue
+		}
+		next = append(next, value)
+	}
+	if len(next) == 0 {
+		fmt.Fprintln(os.Stderr, "at least one local forward is required")
+		return exitError
+	}
+	config.SetLocalForwards(cfg, next)
+	if err := config.Save(*configPath, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config save failed: %v\n", err)
+		return exitError
+	}
+
+	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+		return ipcclientlocal.RemoveLocalForward(cfg, *localForward)
+	}); ok {
+		if resp.Message != "" {
+			fmt.Println(resp.Message)
+		}
+	}
+	return exitOK
+}
+
+func runClientClear(args []string) int {
+	fs := flag.NewFlagSet("client clear", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+
+	forwards := config.NormalizeLocalForwards(cfg)
+	if len(forwards) == 0 {
+		fmt.Println("no local forwards to clear")
+	} else {
+		config.SetLocalForwards(cfg, nil)
+		if err := config.Save(*configPath, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "config save failed: %v\n", err)
+			return exitError
+		}
+	}
+
+	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+		return ipcclientlocal.ClearLocalForwards(cfg)
+	}); ok {
+		if resp.Message != "" {
+			fmt.Println(resp.Message)
+		}
+	}
+	downClientLaunchdIfPresent(cfg)
+	fmt.Println("to start again, run `rpa client add --local-forward ...` or `rpa init ...`")
+	return exitOK
+}
+
 func runClientDoctor(args []string) int {
 	fs := flag.NewFlagSet("client doctor", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath(), "path to config file")
@@ -716,6 +840,19 @@ func runClientMetrics(args []string) int {
 	return exitOK
 }
 
+func tryClientRuntimeUpdate(fn func() (*ipcclientlocal.Response, error)) (*ipcclientlocal.Response, bool) {
+	resp, err := fn()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "client not running; changes will apply on next start: %v\n", err)
+		return nil, false
+	}
+	if !resp.OK {
+		fmt.Fprintf(os.Stderr, "client update error: %s\n", resp.Message)
+		return resp, false
+	}
+	return resp, true
+}
+
 func tryRuntimeUpdate(fn func() (*ipcclient.Response, error)) (*ipcclient.Response, bool) {
 	resp, err := fn()
 	if err != nil {
@@ -750,6 +887,29 @@ func downLaunchdIfPresent(cfg *config.Config) {
 		return
 	}
 	fmt.Printf("agent down: launchd unloaded (%s)\n", plistPath)
+}
+
+func downClientLaunchdIfPresent(cfg *config.Config) {
+	plistPath, err := launchd.PlistPath(cfg.Client.LaunchdLabel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve launchd plist failed: %v\n", err)
+		return
+	}
+	if _, err := os.Stat(plistPath); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "stat launchd plist failed: %v\n", err)
+		}
+		return
+	}
+	if err := launchd.Bootout(plistPath); err != nil {
+		fmt.Fprintf(os.Stderr, "launchd bootout failed: %v\n", err)
+		return
+	}
+	if _, err := launchd.Uninstall(cfg.Client.LaunchdLabel); err != nil {
+		fmt.Fprintf(os.Stderr, "launchd uninstall failed: %v\n", err)
+		return
+	}
+	fmt.Printf("client down: launchd unloaded (%s)\n", plistPath)
 }
 
 func runAgentRun(args []string) int {
@@ -1095,6 +1255,9 @@ func printUsage() {
 	fmt.Println("  rpa client up --config rpa.yaml [--local-forward spec]")
 	fmt.Println("  rpa client down --config rpa.yaml")
 	fmt.Println("  rpa client run --config rpa.yaml [--local-forward spec]")
+	fmt.Println("  rpa client add --local-forward spec --config rpa.yaml")
+	fmt.Println("  rpa client remove --local-forward spec --config rpa.yaml")
+	fmt.Println("  rpa client clear --config rpa.yaml")
 	fmt.Println("  rpa client status --config rpa.yaml")
 	fmt.Println("  rpa client logs --config rpa.yaml")
 	fmt.Println("  rpa client metrics --config rpa.yaml")
@@ -1109,4 +1272,5 @@ func printUsage() {
 	fmt.Println("  Default config path: ~/.rpa/rpa.yaml")
 	fmt.Println("Notes:")
 	fmt.Println("  agent clear removes all forwards and stops the service")
+	fmt.Println("  client clear removes all forwards and stops the service")
 }
