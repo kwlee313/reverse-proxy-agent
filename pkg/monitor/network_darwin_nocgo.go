@@ -1,7 +1,7 @@
-//go:build !darwin
+//go:build darwin && !cgo
 
-// Package monitor provides platform-specific sleep and network monitoring hooks.
-// It is used by the agent and can be reused by client code.
+// Package monitor provides a polling fallback for network monitoring when cgo is disabled.
+// It keeps client/agent restart behavior consistent on macOS builds without cgo.
 
 package monitor
 
@@ -19,6 +19,6 @@ func StartNetworkMonitor(ctx context.Context, cfg Config, logger *logging.Logger
 	if onEvent == nil {
 		onEvent = func(string) {}
 	}
-	logger.Info("network monitor: using polling fallback")
+	logger.Info("network monitor: using polling fallback (cgo disabled)")
 	networkWatcher(ctx, logger, time.Duration(cfg.NetworkPollSec)*time.Second, onEvent)
 }
