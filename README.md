@@ -201,6 +201,7 @@ client_logging:
 메모:
 - `ssh.remote_forwards`는 중복 제거됩니다.
 - `client.local_forward`/`client.local_forwards`도 동일하게 처리됩니다.
+- 기본 SSH 옵션에 `ServerAlive*`와 `StrictHostKeyChecking=accept-new`가 포함됩니다(이미 지정한 경우 유지).
 - `agent clear`는 포워드를 모두 제거하고 서비스도 내려갑니다.
 
 ## 관측성

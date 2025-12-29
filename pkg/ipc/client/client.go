@@ -6,8 +6,11 @@ package client
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os"
+	"syscall"
 
 	"reverse-proxy-agent/pkg/config"
 )
@@ -53,7 +56,7 @@ func send(cfg *config.Config, req request) (*Response, error) {
 	}
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("connect to client: %w", err)
+		return nil, friendlyDialError("client", err)
 	}
 	defer conn.Close()
 
@@ -68,4 +71,15 @@ func send(cfg *config.Config, req request) (*Response, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	return &resp, nil
+}
+
+func friendlyDialError(kind string, err error) error {
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOENT):
+		return fmt.Errorf("%s not running; start with `rpa %s up` or `rpa %s run`", kind, kind, kind)
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return fmt.Errorf("%s socket refused connection; check if %s is running", kind, kind)
+	default:
+		return fmt.Errorf("connect to %s: %w", kind, err)
+	}
 }

@@ -169,12 +169,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.SSH.Port == 0 {
 		cfg.SSH.Port = 22
 	}
-	if len(cfg.SSH.Options) == 0 {
-		cfg.SSH.Options = []string{
-			"ServerAliveInterval=30",
-			"ServerAliveCountMax=3",
-		}
+	if cfg.SSH.Options == nil {
+		cfg.SSH.Options = []string{}
 	}
+	ensureSSHOption(&cfg.SSH.Options, "ServerAliveInterval=30")
+	ensureSSHOption(&cfg.SSH.Options, "ServerAliveCountMax=3")
+	ensureSSHOption(&cfg.SSH.Options, "StrictHostKeyChecking=accept-new")
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
@@ -187,6 +187,30 @@ func applyDefaults(cfg *Config) {
 	if cfg.ClientLogging.Path == "" {
 		cfg.ClientLogging.Path = "~/.rpa/logs/client.log"
 	}
+}
+
+func ensureSSHOption(options *[]string, value string) {
+	key := optionKey(value)
+	if key == "" {
+		return
+	}
+	for _, opt := range *options {
+		if optionKey(opt) == key {
+			return
+		}
+	}
+	*options = append(*options, value)
+}
+
+func optionKey(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.IndexAny(trimmed, " ="); idx >= 0 {
+		return strings.ToLower(trimmed[:idx])
+	}
+	return strings.ToLower(trimmed)
 }
 
 func ValidateAgent(cfg *Config) error {
