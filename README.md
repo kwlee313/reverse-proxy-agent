@@ -135,7 +135,7 @@ rpa client metrics --config path
 rpa client doctor --config path [--local-forward spec]
 
 rpa status --config path
-rpa logs --config path [--follow]
+rpa logs --config path [--follow|-f]
 rpa metrics --config path
 ```
 

@@ -133,6 +133,10 @@ func (c *Client) currentLocalForwards() []string {
 	return config.NormalizeLocalForwards(c.cfg)
 }
 
+func (c *Client) LocalForwards() []string {
+	return c.currentLocalForwards()
+}
+
 func (c *Client) SetLocalForwards(forwards []string) {
 	c.localMu.Lock()
 	defer c.localMu.Unlock()

@@ -788,6 +788,9 @@ func runClientStatus(args []string) int {
 	}
 	fmt.Printf("state: %s\n", resp.Data["state"])
 	fmt.Printf("summary: %s\n", resp.Data["summary"])
+	if v, ok := resp.Data["remote_forwards"]; ok && v != "" {
+		fmt.Printf("remote_forwards: %s\n", v)
+	}
 	fmt.Printf("uptime: %s\n", resp.Data["uptime"])
 	fmt.Printf("restarts: %s\n", resp.Data["restarts"])
 	fmt.Printf("last_exit: %s\n", resp.Data["last_exit"])
@@ -1073,6 +1076,9 @@ func runStatus(args []string) int {
 	}
 	fmt.Printf("state: %s\n", resp.Data["state"])
 	fmt.Printf("summary: %s\n", resp.Data["summary"])
+	if v, ok := resp.Data["local_forwards"]; ok && v != "" {
+		fmt.Printf("local_forwards: %s\n", v)
+	}
 	fmt.Printf("uptime: %s\n", resp.Data["uptime"])
 	fmt.Printf("restarts: %s\n", resp.Data["restarts"])
 	fmt.Printf("last_exit: %s\n", resp.Data["last_exit"])
@@ -1091,6 +1097,7 @@ func runStatus(args []string) int {
 func runLogs(args []string) int {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	follow := fs.Bool("follow", false, "follow logs (placeholder)")
+	followShort := fs.Bool("f", false, "follow logs (shorthand)")
 	configPath := fs.String("config", defaultConfigPath(), "path to config file")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -1102,7 +1109,7 @@ func runLogs(args []string) int {
 		return exitError
 	}
 
-	if *follow {
+	if *follow || *followShort {
 		return followLogs(cfg)
 	}
 	return printRecentLogs(cfg)

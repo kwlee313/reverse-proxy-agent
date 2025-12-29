@@ -179,3 +179,7 @@ func (a *Agent) currentRemoteForwards() []string {
 	defer a.forwardMu.Unlock()
 	return config.NormalizeRemoteForwards(a.cfg)
 }
+
+func (a *Agent) RemoteForwards() []string {
+	return a.currentRemoteForwards()
+}

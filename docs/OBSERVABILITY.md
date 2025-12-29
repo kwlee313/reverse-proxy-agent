@@ -38,6 +38,7 @@ Example:
 `rpa status` returns:
 - `state`: `STOPPED|CONNECTING|CONNECTED`
 - `summary`: `user@host:port`
+- `remote_forwards`: comma-separated remote forward specs (optional)
 - `uptime`: agent uptime
 - `socket`: unix socket path
 - `restarts`: restart count
@@ -50,6 +51,7 @@ Example:
 `rpa client status` returns:
 - `state`: `STOPPED|CONNECTING|CONNECTED`
 - `summary`: `user@host:port (local=...)`
+- `local_forwards`: comma-separated local forward specs (optional)
 - `uptime`: client uptime
 - `socket`: unix socket path
 - `restarts`: restart count
