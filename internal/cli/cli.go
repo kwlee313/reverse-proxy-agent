@@ -31,6 +31,7 @@ import (
 	ipcclientlocal "reverse-proxy-agent/pkg/ipc/client"
 	"reverse-proxy-agent/pkg/launchd"
 	"reverse-proxy-agent/pkg/logging"
+	"reverse-proxy-agent/pkg/statefile"
 )
 
 const (
@@ -310,6 +311,17 @@ func runAgentUp(args []string) int {
 		StdoutPath:  "",
 		StderrPath:  "",
 	}
+	if logPath, err := config.LogPath(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "resolve agent log path failed: %v\n", err)
+		return exitError
+	} else {
+		if err := ensureDir(filepath.Dir(logPath)); err != nil {
+			fmt.Fprintf(os.Stderr, "create agent log dir failed: %v\n", err)
+			return exitError
+		}
+		spec.StdoutPath = logPath
+		spec.StderrPath = logPath
+	}
 	if cfg.Agent.PreventSleep {
 		argv, err := wrapWithCaffeinate(spec.ProgramArgs)
 		if err != nil {
@@ -328,6 +340,13 @@ func runAgentUp(args []string) int {
 		return exitError
 	}
 	fmt.Printf("agent up: launchd loaded (%s)\n", plistPath)
+	if err := waitForServiceReady(cfg, "agent", 3*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "agent up: not ready after 3s: %v\n", err)
+		printLaunchdSummary(cfg.Agent.LaunchdLabel)
+		_ = printLogFileFallback(cfg, "agent")
+		return exitError
+	}
+	fmt.Println("agent up: ready")
 	return exitOK
 }
 
@@ -526,6 +545,17 @@ func runClientUp(args []string) int {
 		StdoutPath:  "",
 		StderrPath:  "",
 	}
+	if logPath, err := config.ClientLogPath(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "resolve client log path failed: %v\n", err)
+		return exitError
+	} else {
+		if err := ensureDir(filepath.Dir(logPath)); err != nil {
+			fmt.Fprintf(os.Stderr, "create client log dir failed: %v\n", err)
+			return exitError
+		}
+		spec.StdoutPath = logPath
+		spec.StderrPath = logPath
+	}
 	if cfg.Client.PreventSleep {
 		argv, err := wrapWithCaffeinate(spec.ProgramArgs)
 		if err != nil {
@@ -544,6 +574,13 @@ func runClientUp(args []string) int {
 		return exitError
 	}
 	fmt.Printf("client up: launchd loaded (%s)\n", plistPath)
+	if err := waitForServiceReady(cfg, "client", 3*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "client up: not ready after 3s: %v\n", err)
+		printLaunchdSummary(cfg.Client.LaunchdLabel)
+		_ = printLogFileFallback(cfg, "client")
+		return exitError
+	}
+	fmt.Println("client up: ready")
 	return exitOK
 }
 
@@ -802,24 +839,7 @@ func runClientLogs(args []string) int {
 		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
 		return exitError
 	}
-
-	resp, err := ipcclientlocal.Query(cfg, "logs")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "client logs query failed: %v\n", err)
-		return exitError
-	}
-	if !resp.OK {
-		fmt.Fprintf(os.Stderr, "client logs error: %s\n", resp.Message)
-		return exitError
-	}
-	if len(resp.Logs) == 0 {
-		fmt.Println("no logs")
-		return exitOK
-	}
-	for _, line := range resp.Logs {
-		fmt.Println(line)
-	}
-	return exitOK
+	return printRecentClientLogs(cfg)
 }
 
 func runClientMetrics(args []string) int {
@@ -1094,10 +1114,16 @@ func printStatusBlock(label string, cfg *config.Config, query func() statusPaylo
 	fmt.Printf("%s:\n", label)
 	if resp.err != nil {
 		fmt.Printf("  error: %s\n", resp.err.Error())
+		if printStatusFallback(label, cfg) {
+			return true
+		}
 		return false
 	}
 	if !resp.ok {
 		fmt.Printf("  error: %s\n", resp.message)
+		if printStatusFallback(label, cfg) {
+			return true
+		}
 		return false
 	}
 	fmt.Printf("  state: %s\n", resp.data["state"])
@@ -1135,6 +1161,43 @@ func printStatusBlock(label string, cfg *config.Config, query func() statusPaylo
 	}
 	if v, ok := resp.data["backoff_ms"]; ok && v != "" {
 		fmt.Printf("  backoff_ms: %s\n", v)
+	}
+	return true
+}
+
+func printStatusFallback(label string, cfg *config.Config) bool {
+	var path string
+	var err error
+	switch label {
+	case "agent":
+		path, err = config.AgentStatePath(cfg)
+	case "client":
+		path, err = config.ClientStatePath(cfg)
+	default:
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	snap, err := statefile.Read(path)
+	if err != nil {
+		return false
+	}
+	fmt.Println("  note: using last known state (service not running)")
+	if snap.LastExit != "" {
+		fmt.Printf("  last_exit: %s\n", snap.LastExit)
+	}
+	if snap.LastClass != "" {
+		fmt.Printf("  last_class: %s\n", snap.LastClass)
+	}
+	if snap.LastTrigger != "" {
+		fmt.Printf("  last_trigger: %s\n", snap.LastTrigger)
+	}
+	if snap.LastSuccessUnix > 0 {
+		fmt.Printf("  last_success_unix: %d\n", snap.LastSuccessUnix)
+	}
+	if snap.UpdatedUnix > 0 {
+		fmt.Printf("  updated_unix: %d\n", snap.UpdatedUnix)
 	}
 	return true
 }
@@ -1551,15 +1614,16 @@ func printRecentLogs(cfg *config.Config) int {
 	resp, err := ipcclient.Query(cfg, "logs")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "logs query failed: %v\n", err)
-		return exitError
+		fmt.Fprintln(os.Stderr, "falling back to log file")
+		return printLogFileFallback(cfg, "agent")
 	}
 	if !resp.OK {
 		fmt.Fprintf(os.Stderr, "logs error: %s\n", resp.Message)
-		return exitError
+		fmt.Fprintln(os.Stderr, "falling back to log file")
+		return printLogFileFallback(cfg, "agent")
 	}
 	if len(resp.Logs) == 0 {
-		fmt.Println("no logs")
-		return exitOK
+		return printLogFileFallback(cfg, "agent")
 	}
 	for _, line := range resp.Logs {
 		fmt.Println(line)
@@ -1571,20 +1635,152 @@ func printRecentClientLogs(cfg *config.Config) int {
 	resp, err := ipcclientlocal.Query(cfg, "logs")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "client logs query failed: %v\n", err)
-		return exitError
+		fmt.Fprintln(os.Stderr, "falling back to client log file")
+		return printLogFileFallback(cfg, "client")
 	}
 	if !resp.OK {
 		fmt.Fprintf(os.Stderr, "client logs error: %s\n", resp.Message)
-		return exitError
+		fmt.Fprintln(os.Stderr, "falling back to client log file")
+		return printLogFileFallback(cfg, "client")
 	}
 	if len(resp.Logs) == 0 {
-		fmt.Println("no logs")
-		return exitOK
+		return printLogFileFallback(cfg, "client")
 	}
 	for _, line := range resp.Logs {
 		fmt.Println(line)
 	}
 	return exitOK
+}
+
+func printLogFileFallback(cfg *config.Config, target string) int {
+	var logPath string
+	var err error
+	switch target {
+	case "agent":
+		logPath, err = config.LogPath(cfg)
+	case "client":
+		logPath, err = config.ClientLogPath(cfg)
+	default:
+		return exitError
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve %s log path failed: %v\n", target, err)
+		return exitError
+	}
+	lines, err := tailLines(logPath, 200)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("no logs (missing log file: %s)\n", logPath)
+			return exitOK
+		}
+		fmt.Fprintf(os.Stderr, "open log file failed: %v\n", err)
+		return exitError
+	}
+	if len(lines) == 0 {
+		fmt.Println("no logs")
+		return exitOK
+	}
+	for _, line := range lines {
+		fmt.Println(line)
+	}
+	return exitOK
+}
+
+func tailLines(path string, limit int) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	if limit <= 0 {
+		return nil, nil
+	}
+	lines := make([]string, 0, limit)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(lines) >= limit {
+			copy(lines, lines[1:])
+			lines[len(lines)-1] = line
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func waitForServiceReady(cfg *config.Config, target string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		switch target {
+		case "agent":
+			resp, err := ipcclient.Query(cfg, "status")
+			if err == nil && resp.OK {
+				return nil
+			}
+			if err != nil {
+				lastErr = err
+			} else if resp.Message != "" {
+				lastErr = errors.New(resp.Message)
+			} else {
+				lastErr = errors.New("status not ready")
+			}
+		case "client":
+			resp, err := ipcclientlocal.Query(cfg, "status")
+			if err == nil && resp.OK {
+				return nil
+			}
+			if err != nil {
+				lastErr = err
+			} else if resp.Message != "" {
+				lastErr = errors.New(resp.Message)
+			} else {
+				lastErr = errors.New("status not ready")
+			}
+		default:
+			return errors.New("unknown target")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("timeout waiting for status")
+	}
+	return lastErr
+}
+
+func printLaunchdSummary(label string) {
+	output, err := launchd.Print(label)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "launchd print failed: %v\n", err)
+		if strings.TrimSpace(output) != "" {
+			fmt.Fprintln(os.Stderr, tailTextLines(output, 40))
+		}
+		return
+	}
+	if strings.TrimSpace(output) == "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "launchd status (last 40 lines):")
+	fmt.Fprintln(os.Stderr, tailTextLines(output, 40))
+}
+
+func tailTextLines(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
 func followLogs(cfg *config.Config) int {

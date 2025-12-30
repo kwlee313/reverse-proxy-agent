@@ -16,6 +16,7 @@ import (
 	"reverse-proxy-agent/pkg/monitor"
 	"reverse-proxy-agent/pkg/restart"
 	"reverse-proxy-agent/pkg/state"
+	"reverse-proxy-agent/pkg/statefile"
 )
 
 type Client struct {
@@ -26,9 +27,19 @@ type Client struct {
 }
 
 func New(cfg *config.Config) *Client {
+	path, err := config.ClientStatePath(cfg)
+	if err != nil {
+		path = ""
+	}
+	runner := supervisor.New(restart.ParsePolicy(cfg.Client.RestartPolicy), restart.NewBackoff(cfg.Client.Restart))
+	if path != "" {
+		runner.SetStateWriter(func(snap statefile.Snapshot) {
+			_ = statefile.Write(path, snap)
+		})
+	}
 	return &Client{
 		cfg:    cfg,
-		runner: supervisor.New(restart.ParsePolicy(cfg.Client.RestartPolicy), restart.NewBackoff(cfg.Client.Restart)),
+		runner: runner,
 	}
 }
 

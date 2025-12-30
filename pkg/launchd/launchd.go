@@ -67,6 +67,19 @@ func Bootout(plistPath string) error {
 	return nil
 }
 
+func Print(label string) (string, error) {
+	if label == "" {
+		return "", fmt.Errorf("launchd label is required")
+	}
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+	cmd := exec.Command("/bin/launchctl", "print", target)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("launchctl print failed: %v", err)
+	}
+	return string(output), nil
+}
+
 func Uninstall(label string) (string, error) {
 	plistPath, err := plistPathForLabel(label)
 	if err != nil {

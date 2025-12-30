@@ -20,6 +20,7 @@ import (
 	"reverse-proxy-agent/pkg/restart"
 	"reverse-proxy-agent/pkg/sshutil"
 	"reverse-proxy-agent/pkg/state"
+	"reverse-proxy-agent/pkg/statefile"
 )
 
 type Options struct {
@@ -57,6 +58,8 @@ type Runner struct {
 	exitSuccessCount  int
 	exitFailureCount  int
 	lastTriggerReason string
+
+	stateWriter func(statefile.Snapshot)
 }
 
 const successGracePeriod = 2 * time.Second
@@ -496,32 +499,70 @@ func (r *Runner) CurrentBackoff() time.Duration {
 
 func (r *Runner) recordExit(reason string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.lastExit = reason
+	writer := r.stateWriter
+	snap := r.snapshotLocked()
+	r.mu.Unlock()
+	r.writeSnapshot(writer, snap)
 }
 
 func (r *Runner) scheduleSuccessMark(cmd *exec.Cmd) {
 	go func() {
 		time.Sleep(successGracePeriod)
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		if r.cmd != cmd || r.sm.State() != state.StateConnected {
+			r.mu.Unlock()
 			return
 		}
 		r.lastSuccess = time.Now()
+		writer := r.stateWriter
+		snap := r.snapshotLocked()
+		r.mu.Unlock()
+		r.writeSnapshot(writer, snap)
 	}()
 }
 
 func (r *Runner) setLastClass(class string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.lastClass = class
+	writer := r.stateWriter
+	snap := r.snapshotLocked()
+	r.mu.Unlock()
+	r.writeSnapshot(writer, snap)
 }
 
 func (r *Runner) setLastTriggerReason(reason string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.lastTriggerReason = reason
+	writer := r.stateWriter
+	snap := r.snapshotLocked()
+	r.mu.Unlock()
+	r.writeSnapshot(writer, snap)
+}
+
+func (r *Runner) SetStateWriter(writer func(statefile.Snapshot)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stateWriter = writer
+}
+
+func (r *Runner) snapshotLocked() statefile.Snapshot {
+	snap := statefile.Snapshot{
+		LastExit:    r.lastExit,
+		LastClass:   r.lastClass,
+		LastTrigger: r.lastTriggerReason,
+	}
+	if !r.lastSuccess.IsZero() {
+		snap.LastSuccessUnix = r.lastSuccess.Unix()
+	}
+	return snap
+}
+
+func (r *Runner) writeSnapshot(writer func(statefile.Snapshot), snap statefile.Snapshot) {
+	if writer == nil {
+		return
+	}
+	writer(snap)
 }
 
 func (r *Runner) recordStartSuccess() {

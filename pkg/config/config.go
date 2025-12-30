@@ -42,9 +42,42 @@ type ClientConfig struct {
 	SleepCheckSec      int           `yaml:"sleep_check_sec"`
 	SleepGapSec        int           `yaml:"sleep_gap_sec"`
 	NetworkPollSec     int           `yaml:"network_poll_sec"`
+	LocalForwards      []string      `yaml:"local_forwards"`
+	PreventSleep       bool          `yaml:"prevent_sleep"`
+}
+
+type clientConfigRaw struct {
+	Name               string        `yaml:"name"`
+	LaunchdLabel       string        `yaml:"launchd_label"`
+	RestartPolicy      string        `yaml:"restart_policy"`
+	Restart            RestartConfig `yaml:"restart"`
+	PeriodicRestartSec int           `yaml:"periodic_restart_sec"`
+	SleepCheckSec      int           `yaml:"sleep_check_sec"`
+	SleepGapSec        int           `yaml:"sleep_gap_sec"`
+	NetworkPollSec     int           `yaml:"network_poll_sec"`
 	LocalForward       string        `yaml:"local_forward"`
 	LocalForwards      []string      `yaml:"local_forwards"`
 	PreventSleep       bool          `yaml:"prevent_sleep"`
+}
+
+func (c *ClientConfig) UnmarshalYAML(value *yaml.Node) error {
+	var raw clientConfigRaw
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	*c = ClientConfig{
+		Name:               raw.Name,
+		LaunchdLabel:       raw.LaunchdLabel,
+		RestartPolicy:      raw.RestartPolicy,
+		Restart:            raw.Restart,
+		PeriodicRestartSec: raw.PeriodicRestartSec,
+		SleepCheckSec:      raw.SleepCheckSec,
+		SleepGapSec:        raw.SleepGapSec,
+		NetworkPollSec:     raw.NetworkPollSec,
+		LocalForwards:      mergeLocalForwards(raw.LocalForward, raw.LocalForwards),
+		PreventSleep:       raw.PreventSleep,
+	}
+	return nil
 }
 
 type SSHConfig struct {
@@ -230,7 +263,7 @@ func ValidateClient(cfg *Config) error {
 		return err
 	}
 	if len(NormalizeLocalForwards(cfg)) == 0 {
-		return errors.New("client.local_forward or client.local_forwards is required")
+		return errors.New("client.local_forwards is required")
 	}
 	return validateSupervisor(cfg.Client.RestartPolicy, cfg.Client.Restart, cfg.Client.PeriodicRestartSec, cfg.Client.SleepCheckSec, cfg.Client.SleepGapSec, cfg.Client.NetworkPollSec, "client")
 }
@@ -314,7 +347,7 @@ func NormalizeLocalForwards(cfg *Config) []string {
 	if cfg == nil {
 		return nil
 	}
-	out := make([]string, 0, 1+len(cfg.Client.LocalForwards))
+	out := make([]string, 0, len(cfg.Client.LocalForwards))
 	seen := make(map[string]struct{})
 	add := func(value string) {
 		trimmed := strings.TrimSpace(value)
@@ -327,7 +360,6 @@ func NormalizeLocalForwards(cfg *Config) []string {
 		seen[trimmed] = struct{}{}
 		out = append(out, trimmed)
 	}
-	add(cfg.Client.LocalForward)
 	for _, value := range cfg.Client.LocalForwards {
 		add(value)
 	}
@@ -371,17 +403,16 @@ func SetLocalForwards(cfg *Config, forwards []string) {
 		seen[val] = struct{}{}
 		trimmed = append(trimmed, val)
 	}
-	switch len(trimmed) {
-	case 0:
-		cfg.Client.LocalForward = ""
-		cfg.Client.LocalForwards = nil
-	case 1:
-		cfg.Client.LocalForward = trimmed[0]
-		cfg.Client.LocalForwards = nil
-	default:
-		cfg.Client.LocalForward = trimmed[0]
-		cfg.Client.LocalForwards = append([]string(nil), trimmed[1:]...)
+	cfg.Client.LocalForwards = append([]string(nil), trimmed...)
+}
+
+func mergeLocalForwards(single string, list []string) []string {
+	out := make([]string, 0, len(list)+1)
+	if strings.TrimSpace(single) != "" {
+		out = append(out, single)
 	}
+	out = append(out, list...)
+	return out
 }
 
 func Save(path string, cfg *Config) error {
@@ -438,6 +469,28 @@ func ClientLogPath(cfg *Config) (string, error) {
 		return "", errors.New("config is nil")
 	}
 	return expandHome(cfg.ClientLogging.Path)
+}
+
+func AgentStatePath(cfg *Config) (string, error) {
+	if cfg == nil {
+		return "", errors.New("config is nil")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".rpa", "agent.state.json"), nil
+}
+
+func ClientStatePath(cfg *Config) (string, error) {
+	if cfg == nil {
+		return "", errors.New("config is nil")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".rpa", "client.state.json"), nil
 }
 
 func expandHome(path string) (string, error) {
