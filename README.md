@@ -132,6 +132,9 @@ rpa logs [agent|client] --config path
 rpa metrics [agent|client] --config path
 rpa doctor [client] --config path
 rpa doctor [agent|client] --config path [--remote-forward spec | --local-forward spec]
+rpa config show --config path
+rpa config get <key> --config path
+rpa config set <key> <value> --config path
 
 rpa status --config path
 rpa logs --config path [--follow|-f]

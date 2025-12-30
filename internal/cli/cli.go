@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,6 +73,8 @@ func Run(args []string) int {
 		return runMetrics(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "config":
+		return runConfig(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage()
@@ -384,11 +387,15 @@ func runAgentAdd(args []string) int {
 		return exitError
 	}
 
-	if resp, ok := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
+	if resp, ok, notRunning := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
 		return ipcclient.AddRemoteForward(cfg, *remoteForward)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
+		}
+	} else if notRunning {
+		if runAgentUp([]string{"--config", *configPath}) != exitOK {
+			return exitError
 		}
 	}
 	return exitOK
@@ -430,7 +437,7 @@ func runAgentRemove(args []string) int {
 		return exitError
 	}
 
-	if resp, ok := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
+	if resp, ok, _ := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
 		return ipcclient.RemoveRemoteForward(cfg, *remoteForward)
 	}); ok {
 		if resp.Message != "" {
@@ -464,7 +471,7 @@ func runAgentClear(args []string) int {
 		}
 	}
 
-	if resp, ok := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
+	if resp, ok, _ := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
 		return ipcclient.ClearRemoteForwards(cfg)
 	}); ok {
 		if resp.Message != "" {
@@ -616,11 +623,15 @@ func runClientAdd(args []string) int {
 		return exitError
 	}
 
-	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+	if resp, ok, notRunning := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
 		return ipcclientlocal.AddLocalForward(cfg, *localForward)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
+		}
+	} else if notRunning {
+		if runClientUp([]string{"--config", *configPath}) != exitOK {
+			return exitError
 		}
 	}
 	return exitOK
@@ -662,7 +673,7 @@ func runClientRemove(args []string) int {
 		return exitError
 	}
 
-	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+	if resp, ok, _ := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
 		return ipcclientlocal.RemoveLocalForward(cfg, *localForward)
 	}); ok {
 		if resp.Message != "" {
@@ -696,7 +707,7 @@ func runClientClear(args []string) int {
 		}
 	}
 
-	if resp, ok := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+	if resp, ok, _ := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
 		return ipcclientlocal.ClearLocalForwards(cfg)
 	}); ok {
 		if resp.Message != "" {
@@ -839,30 +850,40 @@ func runClientMetrics(args []string) int {
 	return exitOK
 }
 
-func tryClientRuntimeUpdate(fn func() (*ipcclientlocal.Response, error)) (*ipcclientlocal.Response, bool) {
+func tryClientRuntimeUpdate(fn func() (*ipcclientlocal.Response, error)) (*ipcclientlocal.Response, bool, bool) {
 	resp, err := fn()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "client not running; changes will apply on next start: %v\n", err)
-		return nil, false
+		notRunning := isNotRunning(err)
+		if notRunning {
+			fmt.Fprintf(os.Stderr, "client not running; starting service: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "client update failed: %v\n", err)
+		}
+		return nil, false, notRunning
 	}
 	if !resp.OK {
 		fmt.Fprintf(os.Stderr, "client update error: %s\n", resp.Message)
-		return resp, false
+		return resp, false, false
 	}
-	return resp, true
+	return resp, true, false
 }
 
-func tryRuntimeUpdate(fn func() (*ipcclient.Response, error)) (*ipcclient.Response, bool) {
+func tryRuntimeUpdate(fn func() (*ipcclient.Response, error)) (*ipcclient.Response, bool, bool) {
 	resp, err := fn()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent not running; changes will apply on next start: %v\n", err)
-		return nil, false
+		notRunning := isNotRunning(err)
+		if notRunning {
+			fmt.Fprintf(os.Stderr, "agent not running; starting service: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "agent update failed: %v\n", err)
+		}
+		return nil, false, notRunning
 	}
 	if !resp.OK {
 		fmt.Fprintf(os.Stderr, "agent update error: %s\n", resp.Message)
-		return resp, false
+		return resp, false, false
 	}
-	return resp, true
+	return resp, true, false
 }
 
 func downLaunchdIfPresent(cfg *config.Config) {
@@ -909,6 +930,10 @@ func downClientLaunchdIfPresent(cfg *config.Config) {
 		return
 	}
 	fmt.Printf("client down: launchd unloaded (%s)\n", plistPath)
+}
+
+func isNotRunning(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "not running")
 }
 
 func runAgentRun(args []string) int {
@@ -1219,6 +1244,233 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "doctor target must be agent or client")
 		return exitUsage
 	}
+}
+
+func runConfig(args []string) int {
+	if len(args) == 0 {
+		printConfigUsage()
+		return exitUsage
+	}
+	switch args[0] {
+	case "get":
+		return runConfigGet(args[1:])
+	case "set":
+		return runConfigSet(args[1:])
+	case "show":
+		return runConfigShow(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config subcommand: %s\n", args[0])
+		printConfigUsage()
+		return exitUsage
+	}
+}
+
+func runConfigShow(args []string) int {
+	fs := flag.NewFlagSet("config show", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config marshal failed: %v\n", err)
+		return exitError
+	}
+	fmt.Print(string(out))
+	return exitOK
+}
+
+func runConfigGet(args []string) int {
+	fs := flag.NewFlagSet("config get", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() != 1 {
+		printConfigUsage()
+		return exitUsage
+	}
+	key := fs.Arg(0)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+	value, err := getConfigValue(cfg, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config get failed: %v\n", err)
+		return exitError
+	}
+	fmt.Println(value)
+	return exitOK
+}
+
+func runConfigSet(args []string) int {
+	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath(), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() != 2 {
+		printConfigUsage()
+		return exitUsage
+	}
+	key := fs.Arg(0)
+	value := fs.Arg(1)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
+		return exitError
+	}
+	if err := setConfigValue(cfg, key, value); err != nil {
+		fmt.Fprintf(os.Stderr, "config set failed: %v\n", err)
+		return exitError
+	}
+	if err := config.Save(*configPath, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config save failed: %v\n", err)
+		return exitError
+	}
+	fmt.Printf("updated %s\n", key)
+	return exitOK
+}
+
+func getConfigValue(cfg *config.Config, key string) (string, error) {
+	field, err := lookupConfigField(cfg, key)
+	if err != nil {
+		return "", err
+	}
+	switch field.Kind() {
+	case reflect.String:
+		return field.String(), nil
+	case reflect.Bool:
+		if field.Bool() {
+			return "true", nil
+		}
+		return "false", nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return fmt.Sprintf("%d", field.Int()), nil
+	case reflect.Float32, reflect.Float64:
+		return fmt.Sprintf("%g", field.Float()), nil
+	case reflect.Slice:
+		if field.Type().Elem().Kind() == reflect.String {
+			out := make([]string, field.Len())
+			for i := 0; i < field.Len(); i++ {
+				out[i] = field.Index(i).String()
+			}
+			return strings.Join(out, ","), nil
+		}
+	}
+	return "", fmt.Errorf("unsupported field type for %s", key)
+}
+
+func setConfigValue(cfg *config.Config, key, value string) error {
+	field, err := lookupConfigField(cfg, key)
+	if err != nil {
+		return err
+	}
+	if !field.CanSet() {
+		return fmt.Errorf("field %s is not settable", key)
+	}
+	switch field.Kind() {
+	case reflect.String:
+		field.SetString(value)
+		return nil
+	case reflect.Bool:
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s", key)
+		}
+		field.SetBool(parsed)
+		return nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid int for %s", key)
+		}
+		field.SetInt(parsed)
+		return nil
+	case reflect.Float32, reflect.Float64:
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("invalid float for %s", key)
+		}
+		field.SetFloat(parsed)
+		return nil
+	case reflect.Slice:
+		if field.Type().Elem().Kind() != reflect.String {
+			return fmt.Errorf("unsupported slice type for %s", key)
+		}
+		items := splitCSV(value)
+		slice := reflect.MakeSlice(field.Type(), len(items), len(items))
+		for i, item := range items {
+			slice.Index(i).SetString(item)
+		}
+		field.Set(slice)
+		return nil
+	default:
+		return fmt.Errorf("unsupported field type for %s", key)
+	}
+}
+
+func lookupConfigField(cfg *config.Config, key string) (reflect.Value, error) {
+	parts := strings.Split(key, ".")
+	current := reflect.ValueOf(cfg)
+	for _, part := range parts {
+		if current.Kind() == reflect.Pointer {
+			current = current.Elem()
+		}
+		if current.Kind() != reflect.Struct {
+			return reflect.Value{}, fmt.Errorf("invalid key %s", key)
+		}
+		field, ok := fieldByYAMLTag(current, part)
+		if !ok {
+			return reflect.Value{}, fmt.Errorf("unknown key %s", key)
+		}
+		current = field
+	}
+	return current, nil
+}
+
+func fieldByYAMLTag(v reflect.Value, key string) (reflect.Value, bool) {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		tag := field.Tag.Get("yaml")
+		tag = strings.Split(tag, ",")[0]
+		name := strings.ToLower(field.Name)
+		if tag == "" {
+			tag = name
+		}
+		if tag == key {
+			return v.Field(i), true
+		}
+	}
+	return reflect.Value{}, false
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func runAgentDoctor(args []string) int {
@@ -1550,15 +1802,31 @@ func printUsage() {
 	fmt.Println("  rpa logs [agent|client]      (logs, default: agent)")
 	fmt.Println("  rpa metrics [agent|client]   (metrics, default: agent)")
 	fmt.Println("  rpa doctor [agent|client]    (pre-flight checks)")
+	fmt.Println("  rpa config <cmd>             (get/set/show config)")
 	fmt.Println("")
 	fmt.Println("Quick help:")
 	fmt.Println("  rpa init --help")
 	fmt.Println("  rpa agent help")
 	fmt.Println("  rpa client help")
+	fmt.Println("  rpa config help")
 	fmt.Println("")
 	fmt.Println("Environment:")
 	fmt.Println("  RPA_CONFIG overrides the default config path")
 	fmt.Println("  Default config path: ~/.rpa/rpa.yaml")
+}
+
+func printConfigUsage() {
+	fmt.Println("rpa config")
+	fmt.Println("")
+	fmt.Println("Usage:")
+	fmt.Println("  rpa config show [--config rpa.yaml]")
+	fmt.Println("  rpa config get <key> [--config rpa.yaml]")
+	fmt.Println("  rpa config set <key> <value> [--config rpa.yaml]")
+	fmt.Println("")
+	fmt.Println("Examples:")
+	fmt.Println("  rpa config get agent.prevent_sleep")
+	fmt.Println("  rpa config set agent.prevent_sleep true")
+	fmt.Println("  rpa config set ssh.options \"ServerAliveInterval=30,ServerAliveCountMax=3\"")
 }
 
 func printAgentUsage() {
@@ -1579,7 +1847,7 @@ func printAgentUsage() {
 	fmt.Println("  run: run in foreground for debugging (non-persistent)")
 	fmt.Println("  add/remove: updates config and restarts running agent if active")
 	fmt.Println("  clear: removes all forwards and stops the service")
-	fmt.Println("  prevent_sleep: set agent.prevent_sleep=true to keep the system awake")
+	fmt.Println("  sleep prevention is a config flag: agent.prevent_sleep=true")
 	fmt.Println("")
 	fmt.Println("Remote forward spec example:")
 	fmt.Println("  \"0.0.0.0:2222:localhost:22\"  (bind:remotePort:localHost:localPort)")
@@ -1603,7 +1871,7 @@ func printClientUsage() {
 	fmt.Println("  run: run in foreground for debugging (non-persistent)")
 	fmt.Println("  add/remove: updates config and restarts running client if active")
 	fmt.Println("  clear: removes all forwards and stops the service")
-	fmt.Println("  prevent_sleep: set client.prevent_sleep=true to keep the system awake")
+	fmt.Println("  sleep prevention is a config flag: client.prevent_sleep=true")
 	fmt.Println("  logs/metrics/doctor: use top-level commands (rpa logs|metrics|doctor)")
 	fmt.Println("")
 	fmt.Println("Local forward spec example:")
