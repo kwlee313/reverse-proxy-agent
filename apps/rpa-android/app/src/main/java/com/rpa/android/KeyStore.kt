@@ -21,23 +21,35 @@ object KeyStore {
         val privateFile = File(dir, PRIVATE_KEY_FILE)
         val publicFile = File(dir, PUBLIC_KEY_FILE)
         val publicDerFile = File(dir, PUBLIC_KEY_DER_FILE)
-        if (privateFile.exists() && publicFile.exists() && publicDerFile.exists()) {
-            return KeyPairInfo(
+        return try {
+            if (privateFile.exists() && publicFile.exists() && publicDerFile.exists()) {
+                return KeyPairInfo(
+                    privateKeyPath = privateFile.absolutePath,
+                    publicKey = publicFile.readText(),
+                    exists = true,
+                    error = null
+                )
+            }
+            val pair = generateEd25519KeyPair()
+            val publicKeyOpenSsh = toOpenSshPublicKey(pair.public)
+            privateFile.writeBytes(pair.private.encoded)
+            publicFile.writeText(publicKeyOpenSsh)
+            publicDerFile.writeBytes(pair.public.encoded)
+            KeyPairInfo(
                 privateKeyPath = privateFile.absolutePath,
-                publicKey = publicFile.readText(),
-                exists = true
+                publicKey = publicKeyOpenSsh,
+                exists = false,
+                error = null
+            )
+        } catch (e: Exception) {
+            ServiceEvents.log("ERROR", "Key generation failed: ${e.message ?: "unknown error"}")
+            KeyPairInfo(
+                privateKeyPath = privateFile.absolutePath,
+                publicKey = "",
+                exists = false,
+                error = e.message ?: "unknown error"
             )
         }
-        val pair = generateEd25519KeyPair()
-        val publicKeyOpenSsh = toOpenSshPublicKey(pair.public)
-        privateFile.writeBytes(pair.private.encoded)
-        publicFile.writeText(publicKeyOpenSsh)
-        publicDerFile.writeBytes(pair.public.encoded)
-        return KeyPairInfo(
-            privateKeyPath = privateFile.absolutePath,
-            publicKey = publicKeyOpenSsh,
-            exists = false
-        )
     }
 
     fun getPublicKey(context: Context): String? {
@@ -88,5 +100,6 @@ object KeyStore {
 data class KeyPairInfo(
     val privateKeyPath: String,
     val publicKey: String,
-    val exists: Boolean
+    val exists: Boolean,
+    val error: String?
 )

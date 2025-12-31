@@ -381,6 +381,13 @@ fun ConfigScreen(padding: PaddingValues) {
     var editorText by remember { mutableStateOf(ConfigStore.loadText(context)) }
     var showHint by remember { mutableStateOf(true) }
     val keyInfo = remember { KeyStore.ensureKeyPair(context) }
+    val keyError = keyInfo.error
+    val keyText = if (keyError.isNullOrBlank()) {
+        keyInfo.publicKey
+    } else {
+        "Key generation failed: $keyError"
+    }
+    val keyActionsEnabled = keyError.isNullOrBlank() && keyInfo.publicKey.isNotBlank()
 
     Column(
         modifier = Modifier
@@ -437,7 +444,7 @@ fun ConfigScreen(padding: PaddingValues) {
         Text(text = "SSH public key", style = MaterialTheme.typography.labelLarge)
         Spacer(modifier = Modifier.height(6.dp))
         OutlinedTextField(
-            value = keyInfo.publicKey,
+            value = keyText,
             onValueChange = {},
             modifier = Modifier.fillMaxWidth(),
             readOnly = true,
@@ -445,11 +452,27 @@ fun ConfigScreen(padding: PaddingValues) {
             minLines = 3
         )
         Spacer(modifier = Modifier.height(8.dp))
+        if (!keyError.isNullOrBlank()) {
+            Text(
+                text = "Key generation failed on this device. Check Logs for details.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = { ShareHelper.copy(context, "rpa public key", keyInfo.publicKey) }, modifier = Modifier.weight(1f)) {
+            Button(
+                onClick = { ShareHelper.copy(context, "rpa public key", keyInfo.publicKey) },
+                modifier = Modifier.weight(1f),
+                enabled = keyActionsEnabled
+            ) {
                 Text(text = "Copy")
             }
-            Button(onClick = { ShareHelper.share(context, "rpa public key", keyInfo.publicKey) }, modifier = Modifier.weight(1f)) {
+            Button(
+                onClick = { ShareHelper.share(context, "rpa public key", keyInfo.publicKey) },
+                modifier = Modifier.weight(1f),
+                enabled = keyActionsEnabled
+            ) {
                 Text(text = "Share")
             }
         }
