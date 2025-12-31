@@ -12,6 +12,9 @@ object KeyStore {
     private const val PRIVATE_KEY_FILE = "rpa_ed25519"
     private const val PUBLIC_KEY_FILE = "rpa_ed25519.pub"
     private const val PUBLIC_KEY_DER_FILE = "rpa_ed25519.pub.der"
+    private const val ALGORITHM_FILE = "rpa_ed25519.alg"
+    private const val ALG_ED25519 = "ed25519"
+    private const val ALG_RSA = "rsa"
 
     fun ensureKeyPair(context: Context): KeyPairInfo {
         val dir = File(context.filesDir, KEY_DIR)
@@ -21,6 +24,7 @@ object KeyStore {
         val privateFile = File(dir, PRIVATE_KEY_FILE)
         val publicFile = File(dir, PUBLIC_KEY_FILE)
         val publicDerFile = File(dir, PUBLIC_KEY_DER_FILE)
+        val algFile = File(dir, ALGORITHM_FILE)
         return try {
             if (privateFile.exists() && publicFile.exists() && publicDerFile.exists()) {
                 return KeyPairInfo(
@@ -30,11 +34,13 @@ object KeyStore {
                     error = null
                 )
             }
-            val pair = generateEd25519KeyPair()
-            val publicKeyOpenSsh = toOpenSshPublicKey(pair.public)
+            val algorithm = selectAlgorithm()
+            val pair = generateKeyPair(algorithm)
+            val publicKeyOpenSsh = toOpenSshPublicKey(pair.public, algorithm)
             privateFile.writeBytes(pair.private.encoded)
             publicFile.writeText(publicKeyOpenSsh)
             publicDerFile.writeBytes(pair.public.encoded)
+            algFile.writeText(algorithm)
             KeyPairInfo(
                 privateKeyPath = privateFile.absolutePath,
                 publicKey = publicKeyOpenSsh,
@@ -68,32 +74,123 @@ object KeyStore {
         File(dir, PRIVATE_KEY_FILE).delete()
         File(dir, PUBLIC_KEY_FILE).delete()
         File(dir, PUBLIC_KEY_DER_FILE).delete()
+        File(dir, ALGORITHM_FILE).delete()
     }
 
     fun loadKeyPair(context: Context): KeyPair {
         val dir = File(context.filesDir, KEY_DIR)
         val privateFile = File(dir, PRIVATE_KEY_FILE)
         val publicDerFile = File(dir, PUBLIC_KEY_DER_FILE)
+        val algFile = File(dir, ALGORITHM_FILE)
         if (!privateFile.exists() || !publicDerFile.exists()) {
             ensureKeyPair(context)
         }
+        val algorithm = readAlgorithm(algFile, File(dir, PUBLIC_KEY_FILE))
         val privateBytes = privateFile.readBytes()
         val publicBytes = publicDerFile.readBytes()
-        val keyFactory = java.security.KeyFactory.getInstance("Ed25519")
-        val privateKey = keyFactory.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privateBytes))
-        val publicKey = keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(publicBytes))
-        return KeyPair(publicKey, privateKey)
+        return try {
+            val keyFactory = java.security.KeyFactory.getInstance(toJcaAlgorithm(algorithm))
+            val privateKey = keyFactory.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privateBytes))
+            val publicKey = keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(publicBytes))
+            KeyPair(publicKey, privateKey)
+        } catch (e: Exception) {
+            ServiceEvents.log("WARN", "Key load failed for $algorithm, regenerating RSA: ${e.message}")
+            regenerateKeys(context, ALG_RSA)
+            val keyFactory = java.security.KeyFactory.getInstance("RSA")
+            val refreshedPrivate = privateFile.readBytes()
+            val refreshedPublic = publicDerFile.readBytes()
+            val privateKey = keyFactory.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(refreshedPrivate))
+            val publicKey = keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(refreshedPublic))
+            KeyPair(publicKey, privateKey)
+        }
     }
 
-    private fun generateEd25519KeyPair(): KeyPair {
-        val generator = KeyPairGenerator.getInstance("Ed25519")
-        return generator.generateKeyPair()
+    private fun selectAlgorithm(): String {
+        return if (supportsEd25519()) ALG_ED25519 else ALG_RSA
     }
 
-    private fun toOpenSshPublicKey(publicKey: PublicKey): String {
-        val raw = publicKey.encoded
-        val b64 = Base64.encodeToString(raw, Base64.NO_WRAP)
-        return "ssh-ed25519 $b64 rpa-android"
+    private fun supportsEd25519(): Boolean {
+        return runCatching { KeyPairGenerator.getInstance("Ed25519") }.isSuccess
+    }
+
+    private fun generateKeyPair(algorithm: String): KeyPair {
+        return if (algorithm == ALG_ED25519) {
+            KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        } else {
+            val generator = KeyPairGenerator.getInstance("RSA")
+            generator.initialize(2048)
+            generator.generateKeyPair()
+        }
+    }
+
+    private fun toOpenSshPublicKey(publicKey: PublicKey, algorithm: String): String {
+        return if (algorithm == ALG_ED25519) {
+            val raw = extractEd25519PublicKey(publicKey.encoded)
+            val payload = buildSshPayload("ssh-ed25519", raw)
+            "ssh-ed25519 ${Base64.encodeToString(payload, Base64.NO_WRAP)} rpa-android"
+        } else {
+            val rsa = publicKey as java.security.interfaces.RSAPublicKey
+            val payload = buildSshPayload("ssh-rsa", rsa.publicExponent.toByteArray(), rsa.modulus.toByteArray())
+            "ssh-rsa ${Base64.encodeToString(payload, Base64.NO_WRAP)} rpa-android"
+        }
+    }
+
+    private fun buildSshPayload(type: String, vararg fields: ByteArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        writeString(out, type.toByteArray(Charsets.US_ASCII))
+        fields.forEach { writeString(out, it) }
+        return out.toByteArray()
+    }
+
+    private fun writeString(out: java.io.ByteArrayOutputStream, value: ByteArray) {
+        val len = value.size
+        out.write(byteArrayOf(
+            (len ushr 24).toByte(),
+            (len ushr 16).toByte(),
+            (len ushr 8).toByte(),
+            len.toByte()
+        ))
+        out.write(value)
+    }
+
+    private fun extractEd25519PublicKey(encoded: ByteArray): ByteArray {
+        if (encoded.isNotEmpty() && encoded.lastIndex >= 32) {
+            return encoded.copyOfRange(encoded.size - 32, encoded.size)
+        }
+        throw IllegalArgumentException("invalid ed25519 public key")
+    }
+
+    private fun toJcaAlgorithm(algorithm: String): String {
+        return if (algorithm == ALG_ED25519) "Ed25519" else "RSA"
+    }
+
+    private fun readAlgorithm(algFile: File, publicFile: File): String {
+        if (algFile.exists()) {
+            return algFile.readText().trim().ifBlank { ALG_RSA }
+        }
+        if (publicFile.exists()) {
+            val first = publicFile.readText().trim().split(" ").firstOrNull().orEmpty()
+            if (first == "ssh-ed25519") return ALG_ED25519
+            if (first == "ssh-rsa") return ALG_RSA
+        }
+        return ALG_RSA
+    }
+
+    private fun regenerateKeys(context: Context, algorithm: String) {
+        val dir = File(context.filesDir, KEY_DIR)
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        val privateFile = File(dir, PRIVATE_KEY_FILE)
+        val publicFile = File(dir, PUBLIC_KEY_FILE)
+        val publicDerFile = File(dir, PUBLIC_KEY_DER_FILE)
+        val algFile = File(dir, ALGORITHM_FILE)
+        val pair = generateKeyPair(algorithm)
+        val publicKeyOpenSsh = toOpenSshPublicKey(pair.public, algorithm)
+        privateFile.writeBytes(pair.private.encoded)
+        publicFile.writeText(publicKeyOpenSsh)
+        publicDerFile.writeBytes(pair.public.encoded)
+        algFile.writeText(algorithm)
     }
 }
 

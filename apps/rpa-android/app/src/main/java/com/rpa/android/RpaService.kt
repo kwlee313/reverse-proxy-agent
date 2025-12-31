@@ -91,7 +91,12 @@ class RpaService : Service() {
                 stopSelf()
                 return@launch
             }
-            val keyPair = KeyStore.loadKeyPair(this@RpaService)
+            val keyPair = runCatching { KeyStore.loadKeyPair(this@RpaService) }.getOrElse {
+                ServiceEvents.log("ERROR", "key error: ${it.message}")
+                updateStatus(ServiceState.STOPPED, "Key error: ${it.message}")
+                stopSelf()
+                return@launch
+            }
             MetricsStore.onUptimeStart()
             sleepMonitor?.stop()
             sleepMonitor = SleepMonitor(
