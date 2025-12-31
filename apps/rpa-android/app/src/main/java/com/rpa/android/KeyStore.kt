@@ -35,12 +35,21 @@ object KeyStore {
                 )
             }
             val algorithm = selectAlgorithm()
-            val pair = generateKeyPair(algorithm)
-            val publicKeyOpenSsh = toOpenSshPublicKey(pair.public, algorithm)
+            val (pair, finalAlgorithm) = try {
+                generateKeyPair(algorithm) to algorithm
+            } catch (genError: Exception) {
+                if (algorithm == ALG_ED25519) {
+                    ServiceEvents.log("WARN", "Ed25519 keygen failed, falling back to RSA: ${genError.message}")
+                    generateKeyPair(ALG_RSA) to ALG_RSA
+                } else {
+                    throw genError
+                }
+            }
+            val publicKeyOpenSsh = toOpenSshPublicKey(pair.public, finalAlgorithm)
             privateFile.writeBytes(pair.private.encoded)
             publicFile.writeText(publicKeyOpenSsh)
             publicDerFile.writeBytes(pair.public.encoded)
-            algFile.writeText(algorithm)
+            algFile.writeText(finalAlgorithm)
             KeyPairInfo(
                 privateKeyPath = privateFile.absolutePath,
                 publicKey = publicKeyOpenSsh,
