@@ -1,8 +1,13 @@
 package com.rpa.android
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -53,6 +58,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.rpa.android.ui.theme.RpaTheme
 
 class MainActivity : ComponentActivity() {
@@ -107,6 +113,25 @@ data class DoctorItem(
 fun RpaApp() {
     var selectedTab by remember { mutableStateOf(AppTab.Home) }
     val context = LocalContext.current
+    var pendingStart by remember { mutableStateOf(false) }
+    var notificationsGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notificationsGranted = granted
+        if (granted && pendingStart) {
+            RpaServiceController.start(context)
+        } else if (!granted) {
+            ShareHelper.toast(context, "Notification permission required to start tunnel")
+        }
+        pendingStart = false
+    }
     val serviceStatus by ServiceEvents.status.collectAsState()
     val logs by ServiceEvents.logs.collectAsState()
     val metricsSnapshot by MetricsStore.metrics.collectAsState()
@@ -185,7 +210,14 @@ fun RpaApp() {
                         configText = "",
                         quickNotes = quickNotes
                     ),
-                    onStart = { RpaServiceController.start(context) },
+                    onStart = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsGranted) {
+                            pendingStart = true
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            RpaServiceController.start(context)
+                        }
+                    },
                     onStop = { RpaServiceController.stop(context) }
                 )
                 AppTab.Logs -> LogsScreen(padding, logs)

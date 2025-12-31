@@ -6,10 +6,12 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +35,12 @@ class RpaService : Service() {
         ServiceEvents.init(this)
         createNotificationChannel()
         updateStatus(ServiceState.CONNECTING, "Starting tunnel")
+        if (!canPostNotifications()) {
+            ServiceEvents.log("ERROR", "notification permission not granted")
+            updateStatus(ServiceState.STOPPED, "Notification permission required")
+            stopSelf()
+            return
+        }
         startForeground(NOTIFICATION_ID, buildNotification(statusFlow.value))
         val knownHosts = java.io.File(filesDir, "known_hosts")
         tunnelManager = SshTunnelManager(
@@ -113,6 +121,9 @@ class RpaService : Service() {
     }
 
     private fun updateNotification() {
+        if (!canPostNotifications()) {
+            return
+        }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(statusFlow.value))
     }
@@ -141,6 +152,15 @@ class RpaService : Service() {
             NotificationManager.IMPORTANCE_LOW
         )
         manager.createNotificationChannel(channel)
+    }
+
+    private fun canPostNotifications(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
     }
 
     inner class LocalBinder : Binder() {
