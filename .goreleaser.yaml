@@ -5,7 +5,7 @@ project_name: rpa
 
 before:
   hooks:
-    - cd apps/rpa && go mod tidy
+    - bash -lc "cd apps/rpa && go mod tidy"
 
 builds:
   - id: rpa
