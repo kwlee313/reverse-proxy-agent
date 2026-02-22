@@ -1,44 +1,42 @@
 # reverse-proxy-agent (rpa)
 
-"내 홈서버를 외부에 노출하고 싶은데, 불특정 다수의 접속은 허용하지 않으면서
-선별된 사용자에게만 SSH 기반 접근을 허용하고 싶다" 라는 목적을 위한
-reverse proxy / ssh tunnel agent입니다.
+`reverse-proxy-agent` is an SSH tunnel manager for this goal:
+
+"I want to expose my home server externally, but not to the public internet. I only want SSH-based access for selected users."
+
+Korean version: `README.ko.md`
 
 ## Why not `ngrok` / `tailscale`?
 
-- ngrok, tailscale 역시 훌륭한 솔루션이지만, 홈서버 운영 환경에서 '불특정 다수에게 노출하지 않고'
-  '특정 사용자에게만 접근을 허용'하는 설정을 아주 가볍게 하기는 쉽지 않습니다.
-- 특히 tailscale은 Funnel/공유 기능의 사용성과 편의성이 높지만, 설정/권한 구조가 rpa가 지향하는
-  "SSH 기반으로 최소 권한만 주는 접근"과는 조금 다릅니다. 이 README의 예시들도 그런 Funnel 방식의
-  사용자 경험과 비교되는 포인트를 염두에 두고 작성되었습니다.
-- tailscale을 여러 사용자가 안정적으로 쓰려면 유료 플랜이 필요한 경우가 많습니다. 반면 rpa는
-  SSH 인스턴스 하나만 있으면, 그 인스턴스에 접근 가능한 사용자라면 인원수 제한 없이 확장할 수 있습니다.
-- 이 프로젝트는 SSH 기반으로 좁은 범위(선별된 사용자)의 접근만 허용하는 용도로 설계되었습니다.
+- `ngrok` and `tailscale` are both great tools, but it is not always simple to keep access tightly limited to specific users in small home-server setups.
+- In particular, Tailscale Funnel/share workflows are very convenient, but they are different from rpa's model: SSH-centric access with minimal privileges.
+- Tailscale can also require paid plans for stable multi-user operation in some scenarios. rpa can scale as long as users can access a single SSH instance.
+- This project is intentionally designed for narrow, selected-user access based on standard SSH.
 
-## Use cases
+## Use Cases
 
-- 홈서버 개발 테스트 환경에서 외부 접속을 열고 싶을 때
-- 개인 서버를 특정 인원에게만 공개하고 싶을 때
-- SSH 터널을 항상 살아있도록 관리하고 싶은 경우
+- Opening external access for home-server development/test environments
+- Sharing a private server with a small set of people
+- Keeping SSH tunnels alive continuously with automatic recovery
 
-## 설치
+## Installation
 
-### GitHub Releases (권장)
+### GitHub Releases (Recommended)
 ```sh
 curl -L -o rpa https://github.com/<owner>/<repo>/releases/latest/download/rpa_<version>_darwin_arm64
 chmod +x rpa
 mv rpa /usr/local/bin/
 ```
 
-### 소스에서 빌드
+### Build From Source
 ```sh
 cd apps/rpa
 go build -o rpa ./cmd/rpa
 ```
 
-## 빠른 시작
+## Quick Start
 
-### Agent (원격 포워드)
+### Agent (Remote Forward)
 ```sh
 rpa init \
   --ssh-user ubuntu \
@@ -50,7 +48,7 @@ rpa status
 rpa logs --follow
 ```
 
-### Client (로컬 포워드)
+### Client (Local Forward)
 ```sh
 rpa init \
   --ssh-user ubuntu \
@@ -62,7 +60,7 @@ rpa status
 rpa logs --follow
 ```
 
-## 구성 예시
+## Configuration Example
 
 ```yaml
 agent:
@@ -122,48 +120,87 @@ client_logging:
   path: "~/.rpa/logs/client.log"
 ```
 
-메모:
-- `ssh.remote_forwards`는 중복 제거됩니다.
-- 기본 SSH 옵션에 `ServerAlive*`와 `StrictHostKeyChecking=accept-new`가 포함됩니다(이미 지정한 경우 유지).
-- `ssh.check_sec`은 SSH 호스트 TCP 체크 주기이며 `rpa status`에 표시됩니다.
-- `agent clear`는 포워드를 모두 제거하고 서비스도 내려갑니다.
+Notes:
+- `ssh.remote_forwards` is deduplicated.
+- Default SSH options include `ServerAlive*` and `StrictHostKeyChecking=accept-new` (existing user-defined options are preserved).
+- `ssh.check_sec` is the SSH host TCP check interval and appears in `rpa status`.
+- `agent clear` removes all forwards and also stops the service.
 
-## 관측성
+## Observability
 
-- 로그는 JSON 라인 형식
-- `last_success_unix`는 연결이 2초 이상 유지된 뒤에만 기록됨
-- status/metrics 상세 스키마: `docs/OBSERVABILITY.md`
-- 구현/복구 로직 상세 설명: `docs/ARCHITECTURE.md`
+- Logs are JSON Lines.
+- `last_success_unix` is recorded only after a connection has stayed alive for at least 2 seconds.
+- Detailed status/metrics schema: `docs/OBSERVABILITY.md`
+- Implementation and recovery details: `docs/ARCHITECTURE.md`
 
-## 릴리스 (GitHub Releases)
+## Release (GitHub Releases)
 
-`v*` 태그를 푸시하면 GoReleaser가 바이너리를 업로드합니다.
+Pushing a `v*` tag triggers GoReleaser and uploads binaries.
+
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-## 개발
+## Development
 
 ```sh
 cd apps/rpa
 go test ./...
 ```
 
-개발 진행 과정은 `docs/archive` 문서들을 통해 확인할 수 있습니다.
+Historical development records are available in `docs/archive`.
 
-## Android 앱
+## Android App
 
-Android 앱은 `apps/rpa-android`에 있습니다. 모바일에서 rpa client를 더 자연스럽고 안정적으로 쓰기 위해
-Go 바이너리 대신 Android 네이티브 기술스택으로 구현한 전용 클라이언트입니다. 폰에서 SSH 터널을 유지하고
-상태/로그/설정을 관리할 수 있게 하여, 데스크톱에서 하던 rpa client 작업을 모바일에서도 동일하게 수행할 수 있도록
-설계되었습니다.
+The Android app is under `apps/rpa-android`. It is a dedicated mobile client implemented with Android-native technologies rather than reusing the Go binary directly. It is designed to keep SSH tunnels alive on phones and manage status/logs/config, so common desktop `rpa client` operations can be performed on mobile as well.
 
-### 기술 스택
-- Kotlin: 앱 전체 로직 구현
-- Coroutines/Flow: 터널 상태, 로그 스트림, 백그라운드 작업 처리
-- Jetpack Compose: 상태/로그/설정/메트릭/닥터 화면 UI
-- Material 3: UI 컴포넌트와 테마
-- Foreground Service: 터널을 백그라운드에서 유지하고 상태바 알림 제공
-- SSHJ: SSH 연결 및 로컬 포워딩
-- SnakeYAML: rpa.yaml 파싱/검증
+### Tech Stack
+- Kotlin: app-wide logic
+- Coroutines/Flow: tunnel state, log streams, background jobs
+- Jetpack Compose: status/logs/config/metrics/doctor screens
+- Material 3: UI components and theming
+- Foreground Service: keep tunnels running in background with notification
+- SSHJ: SSH connections and local forwarding
+- SnakeYAML: `rpa.yaml` parsing and validation
+
+## Internal Component Structure (Mermaid)
+
+```mermaid
+flowchart LR
+  User[Operator CLI] --> CLI[rpa CLI]
+  CLI --> AgentCmd[agent up/down/status]
+  CLI --> ClientCmd[client up/down/run/doctor]
+
+  AgentCmd --> Supervisor[Agent Supervisor]
+  Supervisor --> EventBus[Event Watchers]
+  EventBus --> SleepWatcher[sleep/wake monitor]
+  EventBus --> NetWatcher[network monitor]
+  Supervisor --> RestartPolicy[backoff/debounce policy]
+  Supervisor --> SSHProc[OpenSSH process]
+  SSHProc --> Central[(Central SSH Server)]
+
+  ClientCmd --> ClientSvc[Client Service]
+  ClientSvc --> LocalFwd[Local Forward Manager]
+  LocalFwd --> SSHProc
+
+  Supervisor --> IPC[Local IPC/State]
+  ClientSvc --> IPC
+  IPC --> Obs[status/logs/metrics]
+```
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant C as rpa CLI
+  participant A as Agent Supervisor
+  participant S as OpenSSH
+  participant CS as Central SSH
+
+  U->>C: rpa agent up
+  C->>A: start service + load config
+  A->>S: spawn ssh with forwards
+  S->>CS: establish tunnel
+  A->>A: monitor sleep/network events
+  A->>S: restart on event/failure
+```
