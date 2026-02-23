@@ -21,7 +21,7 @@ func Write(path string, snap Snapshot) error {
 	if path == "" {
 		return fmt.Errorf("state path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	snap.UpdatedUnix = time.Now().Unix()
@@ -29,7 +29,7 @@ func Write(path string, snap Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil

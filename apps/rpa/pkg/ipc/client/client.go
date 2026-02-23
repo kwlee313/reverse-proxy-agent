@@ -22,6 +22,11 @@ type Response struct {
 	Logs    []string          `json:"logs,omitempty"`
 }
 
+var (
+	ErrClientNotRunning    = errors.New("client not running")
+	ErrClientSocketRefused = errors.New("client socket refused")
+)
+
 type request struct {
 	Command string            `json:"command"`
 	Args    map[string]string `json:"args,omitempty"`
@@ -76,9 +81,9 @@ func send(cfg *config.Config, req request) (*Response, error) {
 func friendlyDialError(kind string, err error) error {
 	switch {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOENT):
-		return fmt.Errorf("%s not running; start with `rpa %s up` or `rpa %s run`", kind, kind, kind)
+		return fmt.Errorf("%w: %s not running; start with `rpa %s up` or `rpa %s run`", ErrClientNotRunning, kind, kind, kind)
 	case errors.Is(err, syscall.ECONNREFUSED):
-		return fmt.Errorf("%s socket refused connection; check if %s is running", kind, kind)
+		return fmt.Errorf("%w: %s socket refused connection; check if %s is running", ErrClientSocketRefused, kind, kind)
 	default:
 		return fmt.Errorf("connect to %s: %w", kind, err)
 	}

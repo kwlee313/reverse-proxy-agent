@@ -272,7 +272,7 @@ func runInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "create config dir failed: %v\n", err)
 		return exitError
 	}
-	if err := os.WriteFile(*configPath, out, 0o644); err != nil {
+	if err := os.WriteFile(*configPath, out, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "write config failed: %v\n", err)
 		return exitError
 	}
@@ -973,7 +973,10 @@ func downClientLaunchdIfPresent(cfg *config.Config) {
 }
 
 func isNotRunning(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "not running")
+	return errors.Is(err, ipcclient.ErrAgentNotRunning) ||
+		errors.Is(err, ipcclientlocal.ErrClientNotRunning) ||
+		errors.Is(err, ipcclient.ErrAgentSocketRefused) ||
+		errors.Is(err, ipcclientlocal.ErrClientSocketRefused)
 }
 
 func runAgentRun(args []string) int {
@@ -1899,7 +1902,7 @@ func ensureDir(dir string) error {
 	if dir == "." || dir == "" {
 		return nil
 	}
-	return os.MkdirAll(dir, 0o755)
+	return os.MkdirAll(dir, 0o700)
 }
 
 func expandTilde(path string) string {

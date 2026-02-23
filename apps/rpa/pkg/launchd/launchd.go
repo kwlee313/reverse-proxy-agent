@@ -5,6 +5,7 @@ package launchd
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,7 +124,14 @@ func renderPlist(spec Spec) ([]byte, error) {
 		StderrPath: spec.StderrPath,
 	}
 
-	tpl := template.Must(template.New("plist").Parse(plistTemplate))
+	funcs := template.FuncMap{
+		"xml": func(value string) string {
+			var out bytes.Buffer
+			_ = xml.EscapeText(&out, []byte(value))
+			return out.String()
+		},
+	}
+	tpl := template.Must(template.New("plist").Funcs(funcs).Parse(plistTemplate))
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("render plist: %w", err)
@@ -136,11 +144,11 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{{.Label}}</string>
+	<string>{{xml .Label}}</string>
 	<key>ProgramArguments</key>
 	<array>
 {{- range .Args }}
-		<string>{{ . }}</string>
+		<string>{{xml .}}</string>
 {{- end }}
 	</array>
 	<key>RunAtLoad</key>
@@ -149,11 +157,11 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<{{ if .KeepAlive }}true{{ else }}false{{ end }}/>
 {{- if .StdoutPath }}
 	<key>StandardOutPath</key>
-	<string>{{ .StdoutPath }}</string>
+		<string>{{xml .StdoutPath}}</string>
 {{- end }}
 {{- if .StderrPath }}
 	<key>StandardErrorPath</key>
-	<string>{{ .StderrPath }}</string>
+		<string>{{xml .StderrPath}}</string>
 {{- end }}
 </dict>
 </plist>

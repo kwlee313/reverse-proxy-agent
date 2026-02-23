@@ -72,7 +72,7 @@ func NewLogger(cfg *config.Config, ring *LogBuffer) (*Logger, error) {
 }
 
 func NewLoggerWithPath(path string, ring *LogBuffer) (*Logger, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create log dir: %w", err)
 	}
 	return &Logger{path: path, ring: ring, level: zerolog.InfoLevel}, nil
@@ -94,7 +94,7 @@ func (l *Logger) Event(level, event string, fields map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
