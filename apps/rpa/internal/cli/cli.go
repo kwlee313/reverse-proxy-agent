@@ -416,6 +416,8 @@ func runAgentAdd(args []string) int {
 		if runAgentUp([]string{"--config", *configPath}) != exitOK {
 			return exitError
 		}
+	} else {
+		return exitError
 	}
 	return exitOK
 }
@@ -456,12 +458,14 @@ func runAgentRemove(args []string) int {
 		return exitError
 	}
 
-	if resp, ok, _ := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
+	if resp, ok, notRunning := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
 		return ipcclient.RemoveRemoteForward(cfg, *remoteForward)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
 		}
+	} else if !notRunning {
+		return exitError
 	}
 	return exitOK
 }
@@ -490,15 +494,21 @@ func runAgentClear(args []string) int {
 		}
 	}
 
-	if resp, ok, _ := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
+	runtimeFailed := false
+	if resp, ok, notRunning := tryRuntimeUpdate(func() (*ipcclient.Response, error) {
 		return ipcclient.ClearRemoteForwards(cfg)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
 		}
+	} else if !notRunning {
+		runtimeFailed = true
 	}
 	downLaunchdIfPresent(cfg)
 	fmt.Println("to start again, run `rpa agent add --remote-forward ...` or `rpa init ...`")
+	if runtimeFailed {
+		return exitError
+	}
 	return exitOK
 }
 
@@ -670,6 +680,8 @@ func runClientAdd(args []string) int {
 		if runClientUp([]string{"--config", *configPath}) != exitOK {
 			return exitError
 		}
+	} else {
+		return exitError
 	}
 	return exitOK
 }
@@ -710,12 +722,14 @@ func runClientRemove(args []string) int {
 		return exitError
 	}
 
-	if resp, ok, _ := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+	if resp, ok, notRunning := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
 		return ipcclientlocal.RemoveLocalForward(cfg, *localForward)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
 		}
+	} else if !notRunning {
+		return exitError
 	}
 	return exitOK
 }
@@ -744,15 +758,21 @@ func runClientClear(args []string) int {
 		}
 	}
 
-	if resp, ok, _ := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
+	runtimeFailed := false
+	if resp, ok, notRunning := tryClientRuntimeUpdate(func() (*ipcclientlocal.Response, error) {
 		return ipcclientlocal.ClearLocalForwards(cfg)
 	}); ok {
 		if resp.Message != "" {
 			fmt.Println(resp.Message)
 		}
+	} else if !notRunning {
+		runtimeFailed = true
 	}
 	downClientLaunchdIfPresent(cfg)
 	fmt.Println("to start again, run `rpa client add --local-forward ...` or `rpa init ...`")
+	if runtimeFailed {
+		return exitError
+	}
 	return exitOK
 }
 

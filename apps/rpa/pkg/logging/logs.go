@@ -139,6 +139,8 @@ func parseLevel(level string) zerolog.Level {
 }
 
 func (l *Logger) SetLevel(level string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.level = parseLevel(level)
 }
 

@@ -38,9 +38,11 @@ type Options struct {
 type Runner struct {
 	sm *state.StateMachine
 
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	logger *logging.Logger
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	waitDone chan struct{}
+	waitErr  error
+	logger   *logging.Logger
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -116,13 +118,43 @@ func (r *Runner) Start(build func() (*exec.Cmd, error)) error {
 
 	r.mu.Lock()
 	r.cmd = cmd
+	r.waitDone = make(chan struct{})
+	r.waitErr = nil
 	r.errLines = sshutil.NewLineBuffer(10)
+	waitDone := r.waitDone
 	r.mu.Unlock()
+
+	go func() {
+		err := cmd.Wait()
+		r.mu.Lock()
+		if r.cmd == cmd && r.waitDone == waitDone {
+			r.waitErr = err
+		}
+		r.mu.Unlock()
+		close(waitDone)
+	}()
 
 	go drain(stdout, nil)
 	go drain(stderr, r.errLines)
 
 	if err := r.sm.Transition(state.StateConnected); err != nil {
+		r.terminateProcess()
+		select {
+		case <-waitDone:
+		case <-time.After(3 * time.Second):
+			_ = cmd.Process.Kill()
+			select {
+			case <-waitDone:
+			case <-time.After(1 * time.Second):
+			}
+		}
+		r.mu.Lock()
+		if r.cmd == cmd {
+			r.cmd = nil
+			r.waitDone = nil
+			r.waitErr = nil
+		}
+		r.mu.Unlock()
 		return err
 	}
 	r.recordStartSuccess()
@@ -133,18 +165,21 @@ func (r *Runner) Start(build func() (*exec.Cmd, error)) error {
 func (r *Runner) Stop() error {
 	r.mu.Lock()
 	cmd := r.cmd
+	waitDone := r.waitDone
 	r.mu.Unlock()
 
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-		select {
-		case <-time.After(3 * time.Second):
-			_ = cmd.Process.Kill()
-		case <-done:
+		if waitDone != nil {
+			select {
+			case <-waitDone:
+			case <-time.After(3 * time.Second):
+				_ = cmd.Process.Kill()
+				select {
+				case <-waitDone:
+				case <-time.After(1 * time.Second):
+				}
+			}
 		}
 	}
 	if err := r.sm.Transition(state.StateStopped); err != nil {
@@ -250,8 +285,9 @@ func (r *Runner) RunWithLogger(logger *logging.Logger, build func() (*exec.Cmd, 
 		})
 		r.mu.Lock()
 		cmd := r.cmd
+		waitDone := r.waitDone
 		r.mu.Unlock()
-		if cmd == nil {
+		if cmd == nil || waitDone == nil {
 			r.recordExit("ssh command not started")
 			logger.Event("ERROR", "ssh_start_failed", map[string]any{
 				"error": "ssh command not started",
@@ -261,7 +297,10 @@ func (r *Runner) RunWithLogger(logger *logging.Logger, build func() (*exec.Cmd, 
 			continue
 		}
 
-		err := cmd.Wait()
+		<-waitDone
+		r.mu.Lock()
+		err := r.waitErr
+		r.mu.Unlock()
 		exitCode := 0
 		if err != nil {
 			r.recordExitFailure()
@@ -304,6 +343,8 @@ func (r *Runner) RunWithLogger(logger *logging.Logger, build func() (*exec.Cmd, 
 
 		r.mu.Lock()
 		r.cmd = nil
+		r.waitDone = nil
+		r.waitErr = nil
 		r.mu.Unlock()
 
 		if !r.shouldRestart(exitCode, err, class) {
